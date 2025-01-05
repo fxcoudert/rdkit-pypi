@@ -12,7 +12,7 @@ from setuptools import Extension, find_packages, setup
 from setuptools.command.build_ext import build_ext as build_ext_orig
 
 # RDKit version to build (tag from github repository)
-rdkit_tag = "Release_2024_03_6"
+rdkit_tag = "Release_2024_09_4"
 
 with open("README.md", "r", encoding="utf-8") as fh:
     long_description = fh.read()
@@ -176,21 +176,6 @@ freetype/2.13.2
             'target_link_libraries(rdkit_py_base INTERFACE "boost::python${Python3_VERSION_MAJOR}${Python3_VERSION_MINOR}" "boost::numpy${Python3_VERSION_MAJOR}${Python3_VERSION_MINOR}")',
         )
 
-        # on windows, cmake is not configured to detect the python*.lib dynamic library
-        # 
-        # replace_all(
-        #     "CMakeLists.txt",
-        #     'target_link_libraries(rdkit_py_base INTERFACE ${Python3_LIBRARIES} )',
-        #     'message("HERE")\n message(${Python3_LIBRARIES})\n target_link_libraries(rdkit_py_base INTERFACE ${Python3_LIBRARIES} )',
-        # )
-
-        # on windows; bug in 2024_03_6
-        replace_all(
-            "CMakeLists.txt",
-            'target_link_libraries(rdkit_py_base INTERFACE ${Python3_LIBRARY} )',
-            'target_link_libraries(rdkit_py_base INTERFACE ${Python3_LIBRARIES} )',
-        )
-        
         if "macosx" in os.environ["CIBW_BUILD"]:
             # Replace Cairo with cairo because conan uses lower case target names
             # only on MacOS cairo is installed using conan
@@ -205,13 +190,14 @@ freetype/2.13.2
                 'target_link_libraries(MolDraw2D_static PUBLIC cairo::cairo)',
             )
 
+        # introduced in 2024_09_01 for compiling pubchem shape.
+        replace_all(
+            "External/pubchem_shape/Wrap/CMakeLists.txt",
+            'find_package(Python3 COMPONENTS Interpreter Development NumPy REQUIRED)',
+            'find_package(Python3 COMPONENTS Interpreter Development NumPy)',
+        )
 
-
-        print("---- Conf vars", file=sys.stderr)
-        print(sysconfig.get_paths(), file=sys.stderr)
-        print(sysconfig.get_config_vars(), file=sys.stderr)
-        print("---- Conf vars", file=sys.stderr)
-        
+  
 
         # Define CMake options
         options = [
@@ -288,11 +274,21 @@ freetype/2.13.2
             options += [
                 "-DRDK_OPTIMIZE_POPCNT=OFF",
                 # Otherwise, cmake tries to link the system freetype
-                "-DFREETYPE_LIBRARY=/opt/homebrew/lib/libfreetype.dylib",
-                "-DFREETYPE_INCLUDE_DIRS=/opt/homebrew/include",
+                # "-DFREETYPE_LIBRARY=/opt/homebrew/lib/libfreetype.dylib",
+                # "-DFREETYPE_INCLUDE_DIRS=/opt/homebrew/include",
                 # Arm64 build start with development target 11.0
                 f"-DCMAKE_OSX_DEPLOYMENT_TARGET={os.environ.get('MACOSX_DEPLOYMENT_TARGET', '11.0')}",
+                f"-DCMAKE_OSX_ARCHITECTURES=arm64",
+                f"-DCMAKE_VERBOSE_MAKEFILE=ON" # Increase verbosity
             ]
+            # for python 3.13 macOS ARM64, 'CFLAGS', 'LDFLAGS', 'LDSHARED', 'BLDSHARED'  contains '-arch x86_64'
+            #  see https://github.com/rdkit/rdkit/blob/498f57a4eb99a67d842cbc3f89f94b302f398a11/CMakeLists.txt#L376C59-L376C95
+            # remove "-arch x86_64" from PYTHON_LDSHARED
+            if "cp313" in os.environ["CIBW_BUILD"]:
+                old =  '${Python3_EXECUTABLE} -c "import sysconfig; print(sysconfig.get_config_var(\'LDSHARED\').lstrip().split(\' \', 1)[1])"'
+                new = '${Python3_EXECUTABLE} -c "import sysconfig; print(sysconfig.get_config_var(\'LDSHARED\').lstrip().split(\' \', 1)[1].replace(\'-arch x86_64\', \'\'))"'
+                replace_all("CMakeLists.txt", old, new)
+
 
         if "linux" in sys.platform:
             # Use ninja for linux builds
@@ -309,7 +305,7 @@ freetype/2.13.2
             ]
         else:
             cmds = [
-                f"cmake -S . -B build --debug-find-pkg=Python3 {' '.join(options)} ",
+                f"cmake -S . -B build -LAH --debug-find-pkg=Python3 {' '.join(options)} ",
                 "cmake --build build --config Release",
                 "cmake --install build",
             ]
@@ -320,6 +316,13 @@ freetype/2.13.2
         path_site_packages = rdkit_install_path / "lib" / py_name / "site-packages"
         if sys.platform == "win32":
             path_site_packages = rdkit_install_path / "Lib" / "site-packages"
+        
+        
+        print("---- Conf vars", file=sys.stderr)
+        print(sysconfig.get_paths(), file=sys.stderr)
+        print(sysconfig.get_config_vars(), file=sys.stderr)
+        print("---- Conf vars", file=sys.stderr)     
+
 
         print("!!! --- CMAKE build command and variables for RDKit", file=sys.stderr)
         print(cmds, file=sys.stderr)
