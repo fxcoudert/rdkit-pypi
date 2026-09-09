@@ -267,6 +267,24 @@ class BuildRDKit(build_ext_orig):
                 "  if(NOT WIN32)",
                 "  if(NOT WIN32 AND NOT EMSCRIPTEN)",
             )
+            # WebAssembly validates C function signatures at link time.  The
+            # f2c implementation returns int and uses C long, but its two C++
+            # callers declare a void return (and one assumes 64-bit integers).
+            # Use the actual f2c ABI; return values are intentionally ignored.
+            for caller in (
+                "Code/SimDivPickers/HierarchicalClusterPicker.cpp",
+                "Code/ML/Cluster/Murtagh/Clustering.cpp",
+            ):
+                replace_all(
+                    caller,
+                    'extern "C" void distdriver_(',
+                    'extern "C" int distdriver_(',
+                )
+            replace_all(
+                "Code/ML/Cluster/Murtagh/Clustering.cpp",
+                "boost::int64_t",
+                "long int",
+            )
 
   
 
