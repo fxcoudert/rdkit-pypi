@@ -2009,7 +2009,11 @@ class BoostConan(ConanFile):
             if not self.options.without_python:
                 pyversion = Version(self._python_version)
                 self.cpp_info.components[f"python{pyversion.major}{pyversion.minor}"].requires = ["python"]
-                if not self._shared:
+                # Emscripten consumers link these static objects into a shared
+                # WASM core.  They must see Boost.Python's imported data symbols
+                # (notably current_scope) instead of treating the library as a
+                # separate static runtime in every extension module.
+                if not self._shared and self.settings.os != "Emscripten":
                     self.cpp_info.components["python"].defines.append("BOOST_PYTHON_STATIC_LIB")
 
                 self.cpp_info.components[f"numpy{pyversion.major}{pyversion.minor}"].requires = ["numpy"]

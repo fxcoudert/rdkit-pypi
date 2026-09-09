@@ -20,11 +20,13 @@ class RDKitConan(ConanFile):
 
         if is_emscripten:
             # Pyodide is currently single-threaded, and static libraries let
-            # each Python extension become a self-contained WASM side module.
+            # us collect Boost into the shared RDKit WASM core.  Its symbols
+            # must remain globally visible to the thin Python side modules.
             self.options["boost/*"].bzip2 = False
             self.options["boost/*"].multithreading = False
             self.options["boost/*"].numa = False
             self.options["boost/*"].pch = False
+            self.options["boost/*"].visibility = "global"
             required_libraries = {
                 "iostreams",
                 "python",
