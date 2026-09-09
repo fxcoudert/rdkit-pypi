@@ -112,6 +112,9 @@ class BuildRDKit(build_ext_orig):
             emscripten_version = check_output(
                 ["pyodide", "config", "get", "emscripten_version"], text=True
             ).strip()
+            pyodide_toolchain = check_output(
+                ["pyodide", "config", "get", "cmake_toolchain_file"], text=True
+            ).strip()
             compiler_executables = json.dumps(
                 {"c": os.environ["CC"], "cpp": os.environ["CXX"]}
             )
@@ -131,11 +134,14 @@ class BuildRDKit(build_ext_orig):
                 "-s:h",
                 "compiler.libcxx=libc++",
                 "-s:h",
-                "compiler.cppstd=17",
+                "compiler.cppstd=20",
                 "-s:h",
                 "build_type=Release",
                 "-c:h",
                 f"tools.build:compiler_executables={compiler_executables}",
+                "-c:h",
+                "tools.cmake.cmaketoolchain:user_toolchain="
+                + json.dumps([pyodide_toolchain]),
             ]
         elif sys.platform == "win32":
             cmd += ["--profile:build", "default"]
