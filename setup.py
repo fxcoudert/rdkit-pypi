@@ -258,6 +258,15 @@ class BuildRDKit(build_ext_orig):
                 "target_link_libraries(ChemDraw PRIVATE expatpp)",
                 "target_link_libraries(ChemDraw PRIVATE expatpp EXPAT::EXPAT)",
             )
+            # The target sysconfig's LDSHARED contains ELF hardening flags
+            # supplied by the Linux build host.  wasm-ld does not implement
+            # them, while Pyodide's toolchain already supplies all side-module
+            # flags needed for Python extensions.
+            replace_all(
+                "CMakeLists.txt",
+                "  if(NOT WIN32)",
+                "  if(NOT WIN32 AND NOT EMSCRIPTEN)",
+            )
 
   
 
