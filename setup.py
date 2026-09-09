@@ -383,6 +383,20 @@ class BuildRDKit(build_ext_orig):
                 "boost::int64_t",
                 "long int",
             )
+            # Boost.Python's registered<T>::converters cache is a templated
+            # global.  Exporting those globals from every WASM wrapper lets the
+            # dynamic linker interpose a cache initialized by another module,
+            # even though all wrappers correctly share the core registry.
+            # Keep wrapper implementation symbols local; BOOST_PYTHON_MODULE
+            # explicitly gives each PyInit function default visibility.
+            replace_all(
+                "Code/cmake/Modules/RDKitUtils.cmake",
+                'set_target_properties(${RDKPY_NAME} PROPERTIES PREFIX "")',
+                'set_target_properties(${RDKPY_NAME} PROPERTIES PREFIX "")\n'
+                "    set_target_properties(${RDKPY_NAME} PROPERTIES\n"
+                "                          CXX_VISIBILITY_PRESET hidden\n"
+                "                          VISIBILITY_INLINES_HIDDEN ON)",
+            )
 
   
 
