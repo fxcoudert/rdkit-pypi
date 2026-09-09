@@ -1448,7 +1448,7 @@ class BoostConan(ConanFile):
 
     @property
     def _ar(self):
-        ar = VirtualBuildEnv(self).vars().get("AR")
+        ar = VirtualBuildEnv(self).vars().get("AR") or os.environ.get("AR")
         if ar:
             return ar
         if is_apple_os(self) and self.settings.compiler == "apple-clang":
@@ -1457,7 +1457,7 @@ class BoostConan(ConanFile):
 
     @property
     def _ranlib(self):
-        ranlib = VirtualBuildEnv(self).vars().get("RANLIB")
+        ranlib = VirtualBuildEnv(self).vars().get("RANLIB") or os.environ.get("RANLIB")
         if ranlib:
             return ranlib
         if is_apple_os(self) and self.settings.compiler == "apple-clang":

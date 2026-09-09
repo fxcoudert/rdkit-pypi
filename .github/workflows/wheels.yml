@@ -25,13 +25,6 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # Linux 64 bit Intel: x86_64
-          - os: ubuntu-latest
-            python: 313
-            bitness: 64
-            platform_id: manylinux_x86_64
-            platform: auto
-
           # Pyodide
           - os: ubuntu-latest
             python: 313
@@ -97,4 +90,3 @@ jobs:
           name: cp${{ matrix.python }}-${{ matrix.platform_id }}-${{ strategy.job-index }}
           path: ./wheelhouse/*.whl
       
-
