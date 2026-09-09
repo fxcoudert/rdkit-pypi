@@ -250,6 +250,14 @@ class BuildRDKit(build_ext_orig):
                 "OR RDK_BUILD_MINIMAL_LIB)",
                 "OR EMSCRIPTEN OR RDK_BUILD_MINIMAL_LIB)",
             )
+            # expatpp links Expat privately, although its public header includes
+            # expat.h.  Link the imported target to ChemDraw as well so its
+            # include directory is present while compiling ChemDraw itself.
+            replace_all(
+                "External/ChemDraw/CMakeLists.txt",
+                "target_link_libraries(ChemDraw PRIVATE expatpp)",
+                "target_link_libraries(ChemDraw PRIVATE expatpp EXPAT::EXPAT)",
+            )
 
   
 
