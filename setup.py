@@ -221,13 +221,20 @@ class BuildRDKit(build_ext_orig):
             if not objects:
                 raise RuntimeError(f"No wrapper objects found for {extension_path}")
 
-            # pywasmcross adds the current Pyodide side-module flags and exports
-            # the wrapper's PyInit function.  Linking by name records a portable
-            # DT_NEEDED entry that auditwheel-emscripten can vendor below.
-            wrapper_cmd = shlex.split(os.environ["CXX"])
+            # Boost.Python relies on dynamically initialized converter tables.
+            # SIDE_MODULE=2's aggressive dead-code elimination can discard
+            # registrations which are reached indirectly through those tables,
+            # so link wrappers in the same SIDE_MODULE=1 mode as the tested
+            # Pyodide RDKit recipe.  Linking by name records a portable DT_NEEDED
+            # entry that auditwheel-emscripten can vendor below.
+            wrapper_cmd = ["em++"]
             wrapper_cmd += [str(obj) for obj in objects]
+            wrapper_cmd += shlex.split(os.environ.get("SIDE_MODULE_CXXFLAGS", ""))
+            wrapper_cmd += ["-shared"]
+            wrapper_cmd += shlex.split(os.environ.get("SIDE_MODULE_LDFLAGS", ""))
             wrapper_cmd += [
-                "-shared",
+                "-sSIDE_MODULE=1",
+                "-O2",
                 f"-L{core_dir}",
                 "-lrdkit_core",
                 "-o",
