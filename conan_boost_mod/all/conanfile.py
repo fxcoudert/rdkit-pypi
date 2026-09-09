@@ -1596,7 +1596,7 @@ class BoostConan(ConanFile):
             return "clang-win" if self.settings.compiler.get_safe("toolset") == "ClangCL" else "msvc"
         if self.settings.os == "Windows" and self.settings.compiler == "clang":
             return "clang-win"
-        if self.settings.os == "Emscripten" and self.settings.compiler == "clang":
+        if self.settings.os == "Emscripten" and self.settings.compiler in ("clang", "emcc"):
             return "emscripten"
         if self.settings.compiler == "gcc" and is_apple_os(self):
             return "darwin"

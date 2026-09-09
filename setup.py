@@ -1,10 +1,11 @@
+import json
 import os
 import shlex
 import sys
 from distutils.file_util import copy_file
 from pathlib import Path
 from shutil import copytree, rmtree, ignore_patterns
-from subprocess import call, check_call
+from subprocess import call, check_call, check_output
 import sysconfig
 from textwrap import dedent
 
@@ -13,6 +14,15 @@ from setuptools.command.build_ext import build_ext as build_ext_orig
 
 # RDKit version to build (tag from github repository)
 rdkit_tag = "Release_2026_03_6"
+
+
+def is_pyodide_build():
+    return (
+        os.environ.get("CIBW_PLATFORM") == "pyodide"
+        or "pyodide" in os.environ.get("CIBW_BUILD", "")
+        or sysconfig.get_platform().startswith(("emscripten", "pyodide"))
+    )
+
 
 with open("README.md", "r", encoding="utf-8") as fh:
     long_description = fh.read()
@@ -37,8 +47,36 @@ class BuildRDKit(build_ext_orig):
     def conan_install(self, boost_version, conan_toolchain_path):
         """Run the Conan"""
 
-        # Create default profile if it doesn't exist (Conan 2 requirement)
-        check_call(["conan", "profile", "detect", "--exist-ok"])
+        pyodide_build = is_pyodide_build()
+
+        if pyodide_build:
+            # pyodide-build replaces CC/CXX with pywasmcross wrappers.  Those
+            # wrappers intentionally do not implement the compiler probes used
+            # by `conan profile detect`, so detect the native build compiler in
+            # a clean PATH and describe the Emscripten host explicitly below.
+            build_env = os.environ.copy()
+            wrapper_dir = build_env.get("COMPILER_WRAPPER_DIR")
+            if wrapper_dir:
+                build_env["PATH"] = os.pathsep.join(
+                    path
+                    for path in build_env["PATH"].split(os.pathsep)
+                    if Path(path).resolve() != Path(wrapper_dir).resolve()
+                )
+            for variable in ("CC", "CXX", "AR", "LD", "RANLIB", "STRIP"):
+                build_env.pop(variable, None)
+            check_call(
+                [
+                    "conan",
+                    "profile",
+                    "detect",
+                    "--name=rdkit-build",
+                    "--force",
+                ],
+                env=build_env,
+            )
+        else:
+            # Create default profile if it doesn't exist (Conan 2 requirement)
+            check_call(["conan", "profile", "detect", "--exist-ok"])
 
         # This modified conanfile.py for boost does not link libpython*.so
         # When building a platform wheel, we don't want to link libpython*.so.
@@ -70,11 +108,40 @@ class BuildRDKit(build_ext_orig):
             "--deployer=direct_deploy",
         ]
 
-        if sys.platform == "win32":
+        if pyodide_build:
+            emscripten_version = check_output(
+                ["pyodide", "config", "get", "emscripten_version"], text=True
+            ).strip()
+            compiler_executables = json.dumps(
+                {"c": os.environ["CC"], "cpp": os.environ["CXX"]}
+            )
+            cmd += [
+                "--profile:host",
+                "rdkit-build",
+                "--profile:build",
+                "rdkit-build",
+                "-s:h",
+                "os=Emscripten",
+                "-s:h",
+                "arch=wasm",
+                "-s:h",
+                "compiler=emcc",
+                "-s:h",
+                f"compiler.version={emscripten_version}",
+                "-s:h",
+                "compiler.libcxx=libc++",
+                "-s:h",
+                "compiler.cppstd=17",
+                "-s:h",
+                "build_type=Release",
+                "-c:h",
+                f"tools.build:compiler_executables={compiler_executables}",
+            ]
+        elif sys.platform == "win32":
             cmd += ["--profile:build", "default"]
 
         # but force build b2 on linux
-        if "linux" in sys.platform:
+        if "linux" in sys.platform and not pyodide_build:
             cmd += ["--build=b2/*", "--profile:build", "default"]
 
         check_call(cmd)
@@ -90,6 +157,7 @@ class BuildRDKit(build_ext_orig):
         """
 
         cwd = Path().absolute()
+        pyodide_build = is_pyodide_build()
 
         # Install boost and other libraries using Conan
         conan_toolchain_path = cwd / "conan"
@@ -167,6 +235,16 @@ class BuildRDKit(build_ext_orig):
             'find_package(Python3 COMPONENTS Interpreter Development NumPy)',
         )
 
+        if pyodide_build:
+            # RDKit otherwise forces its core libraries to be shared.  Python
+            # extension modules for Pyodide need the core and Boost libraries
+            # linked statically into WebAssembly side modules.
+            replace_all(
+                "CMakeLists.txt",
+                "OR RDK_BUILD_MINIMAL_LIB)",
+                "OR EMSCRIPTEN OR RDK_BUILD_MINIMAL_LIB)",
+            )
+
   
 
         # Define CMake options
@@ -186,10 +264,10 @@ class BuildRDKit(build_ext_orig):
             "-DRDK_BUILD_INCHI_SUPPORT=ON",
             "-DRDK_BUILD_AVALON_SUPPORT=ON",
             "-DRDK_BUILD_PYTHON_WRAPPERS=ON",
-            "-DRDK_BUILD_YAEHMOP_SUPPORT=ON",
+            f"-DRDK_BUILD_YAEHMOP_SUPPORT={'OFF' if pyodide_build else 'ON'}",
             "-DRDK_BUILD_XYZ2MOL_SUPPORT=ON",
             "-DRDK_INSTALL_INTREE=OFF",
-            "-DRDK_BUILD_CAIRO_SUPPORT=ON",
+            f"-DRDK_BUILD_CAIRO_SUPPORT={'OFF' if pyodide_build else 'ON'}",
             "-DRDK_BUILD_FREESASA_SUPPORT=ON",
             # Disable system libs for finding boost
             "-DBoost_NO_SYSTEM_PATHS=ON",
@@ -199,6 +277,20 @@ class BuildRDKit(build_ext_orig):
             # Speed up builds
             "-DRDK_BUILD_CPP_TESTS=OFF",
         ]
+
+        if pyodide_build:
+            options += [
+                "-DCMAKE_POSITION_INDEPENDENT_CODE=ON",
+                "-DBoost_USE_STATIC_LIBS=ON",
+                "-DRDK_INSTALL_STATIC_LIBS=ON",
+                "-DRDK_BUILD_THREADSAFE_SSS=OFF",
+                "-DRDK_TEST_MULTITHREADED=OFF",
+                "-DRDK_OPTIMIZE_POPCNT=OFF",
+                "-DRDK_BUILD_FREETYPE_SUPPORT=OFF",
+                "-DRDK_BUILD_QT_SUPPORT=OFF",
+                "-DRDK_BUILD_PGSQL=OFF",
+                "-DRDK_BUILD_SWIG_WRAPPERS=OFF",
+            ]
 
         # Modifications for Windows
         vcpkg_path = cwd
@@ -317,7 +409,7 @@ class BuildRDKit(build_ext_orig):
         boost_lib_path_bin_windows_only = conan_toolchain_path / "direct_deploy" / "boost" / "bin"
 
         cmds = []
-        if "linux" in sys.platform:
+        if "linux" in sys.platform and not pyodide_build:
             # Libs end with .so
             to_path = Path("/usr/local/lib")
             [copy_file(i, str(to_path)) for i in rdkit_lib_path.rglob("*.so*")]
@@ -366,9 +458,10 @@ class BuildRDKit(build_ext_orig):
 
         # Build the RDKit stubs
 
-        cmds += [
-            f"cmake --build build --config Release --target stubs -v",
-        ]
+        if not pyodide_build:
+            cmds += [
+                "cmake --build build --config Release --target stubs -v",
+            ]
 
         # rdkit-stubs require the site-package path to be in sys.path / PYTHONPATH
         variables["PYTHONPATH"] = (
@@ -382,20 +475,22 @@ class BuildRDKit(build_ext_orig):
         print(cmds, file=sys.stderr)
         print(variables, file=sys.stderr)
 
-        [
-            check_call(
-                shlex.split(c, posix="win32" not in sys.platform),
-                env=dict(os.environ, **variables),
-            )
-            for c in cmds
-        ]
+        if cmds:
+            [
+                check_call(
+                    shlex.split(c, posix="win32" not in sys.platform),
+                    env=dict(os.environ, **variables),
+                )
+                for c in cmds
+            ]
 
-        # Print the stubs error file to rdkit-stubs/gen_rdkit_stubs.err
-        stubs_error_file = (
-            build_path / "rdkit" / "build" / "rdkit-stubs" / "gen_rdkit_stubs.err"
-        )
-        with open(stubs_error_file, "r") as fin:
-            print(fin.read(), file=sys.stderr)
+        if not pyodide_build:
+            # Print the stubs error file to rdkit-stubs/gen_rdkit_stubs.err
+            stubs_error_file = (
+                build_path / "rdkit" / "build" / "rdkit-stubs" / "gen_rdkit_stubs.err"
+            )
+            with open(stubs_error_file, "r") as fin:
+                print(fin.read(), file=sys.stderr)
 
         # Change directory here 
         os.chdir(str(cwd))
@@ -432,7 +527,8 @@ class BuildRDKit(build_ext_orig):
             return ignore_patterns("*.pyc")(path, names)
 
         # Copy the RDKit stubs files to the rdkit-stubs wheels path
-        copytree(dir_rdkit_stubs, wheel_path / "rdkit-stubs", ignore=_logpath)
+        if not pyodide_build:
+            copytree(dir_rdkit_stubs, wheel_path / "rdkit-stubs", ignore=_logpath)
         # Copy the Python files
         copytree(path_site_packages / "rdkit", wheel_path / "rdkit", ignore=_logpath)
         # Copy the data directory
