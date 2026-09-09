@@ -210,7 +210,7 @@ class BuildRDKit(build_ext_orig):
             target_dirs = [
                 path
                 for path in rdkit_build_path.rglob(f"{module_name}.dir")
-                if path.parent.name == "CMakeFiles" and "Wrap" in path.parts
+                if path.parent.name == "CMakeFiles"
             ]
             if len(target_dirs) != 1:
                 raise RuntimeError(
