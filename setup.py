@@ -285,6 +285,26 @@ class BuildRDKit(build_ext_orig):
         ]
 
         if pyodide_build:
+            # FindPython must use the native interpreter while compiling
+            # against Pyodide's target headers.  Supplying only Python_ROOT_DIR
+            # makes CMake search for an Emscripten interpreter inside the
+            # isolated native build environment and it rejects every artifact.
+            import numpy
+
+            python_version = check_output(
+                ["pyodide", "config", "get", "python_version"], text=True
+            ).strip()
+            python_include = check_output(
+                ["pyodide", "config", "get", "python_include_dir"], text=True
+            ).strip()
+            dummy_python_library = build_path / f"libpython{python_version}.a"
+            check_call([os.environ["AR"], "rcs", str(dummy_python_library)])
+            python_install_dir = (
+                rdkit_install_path
+                / "lib"
+                / f"python{sys.version_info.major}.{sys.version_info.minor}"
+                / "site-packages"
+            )
             options += [
                 "-DCMAKE_POSITION_INDEPENDENT_CODE=ON",
                 "-DBoost_USE_STATIC_LIBS=ON",
@@ -296,6 +316,15 @@ class BuildRDKit(build_ext_orig):
                 "-DRDK_BUILD_QT_SUPPORT=OFF",
                 "-DRDK_BUILD_PGSQL=OFF",
                 "-DRDK_BUILD_SWIG_WRAPPERS=OFF",
+                f"-DPython_EXECUTABLE={sys.executable}",
+                f"-DPython_INCLUDE_DIR={python_include}",
+                f"-DPython_LIBRARY={dummy_python_library}",
+                f"-DPython_NumPy_INCLUDE_DIR={numpy.get_include()}",
+                f"-DPython3_EXECUTABLE={sys.executable}",
+                f"-DPython3_INCLUDE_DIR={python_include}",
+                f"-DPython3_LIBRARY={dummy_python_library}",
+                f"-DPython3_NumPy_INCLUDE_DIR={numpy.get_include()}",
+                f"-DPYTHON_INSTDIR={python_install_dir}",
             ]
 
         # Modifications for Windows
