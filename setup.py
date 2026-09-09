@@ -152,6 +152,97 @@ class BuildRDKit(build_ext_orig):
 
         check_call(cmd)
 
+    def relink_pyodide_extensions(
+        self,
+        rdkit_build_path,
+        rdkit_lib_path,
+        path_site_packages,
+        conan_toolchain_path,
+    ):
+        """Put the C++ and Boost.Python state in one shared WASM module.
+
+        Linking the static Boost.Python archive into every extension gives each
+        module a separate converter registry.  RDKit imports types registered by
+        other extension modules, so that layout fails at runtime even though all
+        modules link successfully.  Build one shared core and relink the thin
+        Python wrappers against it instead.
+        """
+
+        core_dir = conan_toolchain_path / "pyodide_libs"
+        core_dir.mkdir(parents=True, exist_ok=True)
+        core_library = core_dir / "librdkit_core.so"
+
+        rdkit_archives = sorted(rdkit_lib_path.glob("*.a"))
+        conan_archives = sorted(
+            (conan_toolchain_path / "direct_deploy").glob("*/lib/*.a")
+        )
+        archives = rdkit_archives + conan_archives
+        if not rdkit_archives or not conan_archives:
+            raise RuntimeError(
+                "Cannot create the Pyodide shared core: static RDKit or Conan "
+                "libraries were not found"
+            )
+
+        # Bypass pywasmcross for this link: the core has no PyInit function and
+        # must export all public symbols for the Python wrapper side modules.
+        core_cmd = ["em++"]
+        core_cmd += shlex.split(os.environ.get("SIDE_MODULE_CXXFLAGS", ""))
+        core_cmd += ["-shared"]
+        core_cmd += shlex.split(os.environ.get("SIDE_MODULE_LDFLAGS", ""))
+        core_cmd += [
+            "-Wl,--no-gc-sections",
+            "-Wl,--export-all",
+            "-Wl,--whole-archive",
+            *(str(archive) for archive in archives),
+            "-Wl,--no-whole-archive",
+            "-o",
+            str(core_library),
+        ]
+        print(
+            f"Linking Pyodide shared core from {len(archives)} static libraries",
+            file=sys.stderr,
+        )
+        check_call(core_cmd)
+
+        wrapper_count = 0
+        for extension_path in sorted(path_site_packages.rglob("*.so")):
+            module_name = extension_path.stem
+            target_dirs = [
+                path
+                for path in rdkit_build_path.rglob(f"{module_name}.dir")
+                if path.parent.name == "CMakeFiles" and "Wrap" in path.parts
+            ]
+            if len(target_dirs) != 1:
+                raise RuntimeError(
+                    f"Expected one CMake wrapper target for {extension_path}, "
+                    f"found {len(target_dirs)}"
+                )
+            objects = sorted(target_dirs[0].rglob("*.o"))
+            if not objects:
+                raise RuntimeError(f"No wrapper objects found for {extension_path}")
+
+            # pywasmcross adds the current Pyodide side-module flags and exports
+            # the wrapper's PyInit function.  Linking by name records a portable
+            # DT_NEEDED entry that auditwheel-emscripten can vendor below.
+            wrapper_cmd = shlex.split(os.environ["CXX"])
+            wrapper_cmd += [str(obj) for obj in objects]
+            wrapper_cmd += [
+                "-shared",
+                f"-L{core_dir}",
+                "-lrdkit_core",
+                "-o",
+                str(extension_path),
+            ]
+            check_call(wrapper_cmd)
+            wrapper_count += 1
+
+        if not wrapper_count:
+            raise RuntimeError("No RDKit Python extensions were relinked")
+        print(
+            f"Relinked {wrapper_count} Pyodide extensions against {core_library}",
+            file=sys.stderr,
+        )
+
     def build_rdkit(self, ext):
         """Build RDKit
 
@@ -477,6 +568,14 @@ class BuildRDKit(build_ext_orig):
         rdkit_lib_path = rdkit_install_path / "lib"
         boost_lib_path = conan_toolchain_path / "direct_deploy" / "boost" / "lib"
         boost_lib_path_bin_windows_only = conan_toolchain_path / "direct_deploy" / "boost" / "bin"
+
+        if pyodide_build:
+            self.relink_pyodide_extensions(
+                Path("build").absolute(),
+                rdkit_lib_path,
+                path_site_packages,
+                conan_toolchain_path,
+            )
 
         cmds = []
         if "linux" in sys.platform and not pyodide_build:
