@@ -3,9 +3,9 @@
 Pyodide eagerly loads every ``*.so`` under site-packages before running Python.
 RDKit's Boost.Python modules must instead be initialized in Python import order,
 after their shared C++ core is loaded.  Rename only the Python wrappers to
-``*.so.wasm`` and install a small import finder for that suffix.  Load the
-wrappers globally so they all use the Boost.Python registry exported by the
-first instance of the shared C++ core.
+``*.so.wasm`` and install a small import finder for that suffix.  Flatten the
+wrappers beside the shared core so Emscripten resolves every dependency using
+the same canonical path, without the ``..`` components produced by auditwheel.
 """
 
 from __future__ import annotations
@@ -30,26 +30,25 @@ if _sys.platform == "emscripten":
     import importlib.util as _importlib_util
     import os as _os
 
-    # RDKit's wrappers exchange Boost.Python converters through librdkit_core.
-    # Make the first loaded wrapper and its dependencies visible to all later
-    # wrappers, matching Pyodide's shared-library package loading semantics.
-    _sys.setdlopenflags(_os.RTLD_NOW | _os.RTLD_GLOBAL)
-
     class _RDKitExtensionFinder(_importlib_abc.MetaPathFinder):
         def find_spec(self, fullname, path, target=None):
             if fullname.split(".", 1)[0] != "rdkit" or not path:
                 return None
             module_name = fullname.rsplit(".", 1)[-1]
-            for directory in path:
-                candidate = _os.path.join(directory, module_name + ".so.wasm")
-                if _os.path.exists(candidate):
-                    loader = _importlib_machinery.ExtensionFileLoader(
-                        fullname, candidate
-                    )
-                    return _importlib_util.spec_from_file_location(
-                        fullname, candidate, loader=loader
-                    )
-            return None
+            candidate = _os.path.normpath(
+                _os.path.join(
+                    _os.path.dirname(__file__),
+                    "..",
+                    "rdkit.libs",
+                    module_name + ".so.wasm",
+                )
+            )
+            if not _os.path.exists(candidate):
+                return None
+            loader = _importlib_machinery.ExtensionFileLoader(fullname, candidate)
+            return _importlib_util.spec_from_file_location(
+                fullname, candidate, loader=loader
+            )
 
     _sys.meta_path.insert(0, _RDKitExtensionFinder())
 
@@ -58,7 +57,7 @@ if _sys.platform == "emscripten":
 
 def _renamed_path(name: str) -> str:
     if name.startswith("rdkit/") and name.endswith(".so"):
-        return name + ".wasm"
+        return "rdkit.libs/" + Path(name).name + ".wasm"
     return name
 
 
@@ -76,6 +75,23 @@ def _record(contents: dict[str, bytes], record_path: str) -> bytes:
     return output.getvalue().encode()
 
 
+def _canonicalize_wrapper_rpath(data: bytes, name: str, parent: Path) -> bytes:
+    from auditwheel_emscripten.module import ModuleWritable
+
+    with tempfile.TemporaryDirectory(prefix="rdkit-wrapper-", dir=parent) as tmp:
+        wrapper = Path(tmp) / Path(name).name
+        wrapper.write_bytes(data)
+        with ModuleWritable(wrapper) as module:
+            dylink = module.parse_dylink_section()
+            if dylink.needed != ["librdkit_core.so"]:
+                raise RuntimeError(
+                    f"Expected {name} to depend only on librdkit_core.so; "
+                    f"found {dylink.needed}"
+                )
+            dylink = dylink._replace(runtime_paths=["$ORIGIN"])
+            return module.patch_dylink(module.encode_dylink_section(dylink))
+
+
 def finalize(wheel: Path) -> int:
     with ZipFile(wheel) as source:
         infos: dict[str, ZipInfo] = {}
@@ -86,6 +102,11 @@ def finalize(wheel: Path) -> int:
             name = _renamed_path(original_info.filename)
             if name != original_info.filename:
                 renamed += 1
+                data = _canonicalize_wrapper_rpath(
+                    data, original_info.filename, wheel.parent
+                )
+            if name in contents:
+                raise RuntimeError(f"Duplicate flattened wheel path: {name}")
             original_info.filename = name
             infos[name] = original_info
             contents[name] = data
