@@ -1448,7 +1448,7 @@ class BoostConan(ConanFile):
 
     @property
     def _ar(self):
-        ar = VirtualBuildEnv(self).vars().get("AR")
+        ar = VirtualBuildEnv(self).vars().get("AR") or os.environ.get("AR")
         if ar:
             return ar
         if is_apple_os(self) and self.settings.compiler == "apple-clang":
@@ -1457,7 +1457,7 @@ class BoostConan(ConanFile):
 
     @property
     def _ranlib(self):
-        ranlib = VirtualBuildEnv(self).vars().get("RANLIB")
+        ranlib = VirtualBuildEnv(self).vars().get("RANLIB") or os.environ.get("RANLIB")
         if ranlib:
             return ranlib
         if is_apple_os(self) and self.settings.compiler == "apple-clang":
@@ -1596,7 +1596,7 @@ class BoostConan(ConanFile):
             return "clang-win" if self.settings.compiler.get_safe("toolset") == "ClangCL" else "msvc"
         if self.settings.os == "Windows" and self.settings.compiler == "clang":
             return "clang-win"
-        if self.settings.os == "Emscripten" and self.settings.compiler == "clang":
+        if self.settings.os == "Emscripten" and self.settings.compiler in ("clang", "emcc"):
             return "emscripten"
         if self.settings.compiler == "gcc" and is_apple_os(self):
             return "darwin"
@@ -2009,7 +2009,11 @@ class BoostConan(ConanFile):
             if not self.options.without_python:
                 pyversion = Version(self._python_version)
                 self.cpp_info.components[f"python{pyversion.major}{pyversion.minor}"].requires = ["python"]
-                if not self._shared:
+                # Emscripten consumers link these static objects into a shared
+                # WASM core.  They must see Boost.Python's imported data symbols
+                # (notably current_scope) instead of treating the library as a
+                # separate static runtime in every extension module.
+                if not self._shared and self.settings.os != "Emscripten":
                     self.cpp_info.components["python"].defines.append("BOOST_PYTHON_STATIC_LIB")
 
                 self.cpp_info.components[f"numpy{pyversion.major}{pyversion.minor}"].requires = ["numpy"]

@@ -16,7 +16,7 @@ build-backend = "setuptools.build_meta"
 build-verbosity = 1
 # test
 test-requires = "pytest"
-test-command = "pytest --exitfirst --verbose --failed-first {package}/tests"
+test-command = "python -m pytest --exitfirst --verbose --failed-first {package}/tests"
 # test-skip = "*-win_amd64"
 
 
@@ -75,3 +75,14 @@ repair-wheel-command = [
     "delvewheel show -v --add-path C:\\libs;C:\\rdkit\\vcpkg_installed\\x64-windows\\bin {wheel}",
     "delvewheel repair -v --add-path C:\\libs;C:\\rdkit\\vcpkg_installed\\x64-windows\\bin -w {dest_dir} {wheel}"
     ]
+
+[tool.cibuildwheel.pyodide]
+
+# The Python extension modules share one RDKit/Boost.Python WASM core. Vendor
+# that dependency into the wheel and update each module's runtime search path.
+# Wrapper modules are then hidden from Pyodide's eager shared-library scan and
+# loaded on demand by an import hook installed in rdkit/__init__.py.
+repair-wheel-command = [
+    "pyodide auditwheel repair --libdir {package}/conan/pyodide_libs --output-dir {dest_dir} {wheel}",
+    "python {package}/scripts/finalize_pyodide_wheel.py {dest_dir}",
+]

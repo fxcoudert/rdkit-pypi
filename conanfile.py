@@ -12,9 +12,43 @@ class RDKitConan(ConanFile):
     settings = "os", "compiler", "build_type", "arch"
     
     def configure(self):
+        is_emscripten = self.settings.os == "Emscripten"
+
         # Configure boost options
-        self.options["boost/*"].shared = True
+        self.options["boost/*"].shared = not is_emscripten
         self.options["boost/*"].without_python = False
+
+        if is_emscripten:
+            # Pyodide is currently single-threaded, and static libraries let
+            # us collect Boost into the shared RDKit WASM core.  Its symbols
+            # must remain globally visible to the thin Python side modules.
+            self.options["boost/*"].bzip2 = False
+            self.options["boost/*"].multithreading = False
+            self.options["boost/*"].numa = False
+            self.options["boost/*"].pch = False
+            self.options["boost/*"].visibility = "global"
+            required_libraries = {
+                "iostreams",
+                "python",
+                "random",
+                "regex",
+                "serialization",
+                "system",
+            }
+            for library in (
+                "atomic", "charconv", "chrono", "cobalt", "container",
+                "context", "contract", "coroutine", "date_time", "exception",
+                "fiber", "filesystem", "graph", "graph_parallel", "iostreams",
+                "json", "locale", "log", "math", "mpi", "nowide",
+                "program_options", "python", "random", "regex", "serialization",
+                "stacktrace", "system", "test", "thread", "timer",
+                "type_erasure", "url", "wave",
+            ):
+                setattr(
+                    self.options["boost/*"],
+                    f"without_{library}",
+                    library not in required_libraries,
+                )
 
         # We always need a posix path with forward slashes
         # Because the workflows run on Windows runners with the Git Bash shell,
@@ -22,7 +56,9 @@ class RDKitConan(ConanFile):
         self.options["boost/*"].python_executable =  Path(sys.executable).as_posix()
 
         # Platform-specific configurations
-        if self.settings.os == "Macos" and self.settings.arch == "armv8":
+        if is_emscripten or (
+            self.settings.os == "Macos" and self.settings.arch == "armv8"
+        ):
             # stacktrace does not work on macOS arm64 for some reason
             self.options["boost/*"].without_stacktrace = True
         else:
